@@ -59,8 +59,21 @@
 #include <opencv2/features2d/features2d.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <vector>
-
+#include <chrono>
 #include "ORBextractor.h"
+#include <fstream>
+extern "C" {
+#include <dma_uio.h>
+}
+#define DEBUG
+#define DMA_REG_SIZE 0x10000
+#define DMA_BUF_BASE_ADDR 0x0e000000  
+#define CFG_SRC_ADDR DMA_BUF_BASE_ADDR
+#define CFG_SIZE (sizeof(uint32_t)*4) // = 0x10
+#define DATA_DST_ADDR (CFG_SRC_ADDR + 0x10000)
+#define DATA_DST_SIZE (sizeof(uint32_t)*16*257) // = 0x4040
+#define DATA_SRC_ADDR (DATA_DST_ADDR + 0x10000)
+#define DATA_SRC_SIZE (sizeof(uint8_t)*image.cols*image.rows) // Image cols: 1241, Image rows: 376. = 0x71eb8
 
 
 using namespace cv;
@@ -69,8 +82,8 @@ using namespace std;
 namespace ORB_SLAM2
 {
 
-const int PATCH_SIZE = 31;
-const int HALF_PATCH_SIZE = 15;
+const int PATCH_SIZE = 29;
+const int HALF_PATCH_SIZE = 14;
 const int EDGE_THRESHOLD = 19;
 
 
@@ -1043,6 +1056,7 @@ static void computeDescriptors(const Mat& image, vector<KeyPoint>& keypoints, Ma
 void ORBextractor::operator()( InputArray _image, InputArray _mask, vector<KeyPoint>& _keypoints,
                       OutputArray _descriptors)
 { 
+#ifdef SOFTWARE_RUN
     if(_image.empty())
         return;
 
@@ -1102,6 +1116,200 @@ void ORBextractor::operator()( InputArray _image, InputArray _mask, vector<KeyPo
         // And add the keypoints to the output
         _keypoints.insert(_keypoints.end(), keypoints.begin(), keypoints.end());
     }
+#else
+    if(_image.empty())
+        return;
+
+    Mat image = _image.getMat();
+    assert(image.type() == CV_8UC1 );
+
+    int fd_dma_cfg = open("/dev/uio12", O_RDWR);
+    uint32_t *dma_cfg_virtual_addr = (uint32_t*)mmap(NULL, DMA_REG_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_cfg, 0);
+    int fd_dma_data = open("/dev/uio13", O_RDWR);
+    uint32_t *dma_data_virtual_addr = (uint32_t*)mmap(NULL, DMA_REG_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_data, 0);
+    int fd_dma_buf = open("/dev/mem", O_RDWR | O_SYNC);
+    // int fd_dma_buf = open("/dev/uio14", O_RDWR | O_SYNC);  // 只能通过 mem 打开，uio 无法打开， 原因未知
+    uint32_t *addrptr_cfg_in = (uint32_t*)mmap(NULL, CFG_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_buf, CFG_SRC_ADDR);
+    uint8_t *addrptr_data_in = (uint8_t*)mmap(NULL, DATA_SRC_ADDR, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_buf, DATA_SRC_ADDR);
+    uint32_t *addrptr_data_out = (uint32_t*)mmap(NULL, DATA_DST_ADDR, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_buf, DATA_DST_ADDR);
+    
+    Mat descriptors;
+
+    int nkeypoints = 0;
+
+    _keypoints.clear();
+    // 写入配置信息
+    printf("Writing configuration information to the DDR memory...\n");
+    addrptr_cfg_in[0] = image.cols;
+    addrptr_cfg_in[1] = image.rows;
+    // 写入图像数据
+    memcpy(addrptr_data_in, image.data, image.cols*image.rows*sizeof(uint8_t));
+    memset(addrptr_data_out, 0, 0xFFFF);
+
+    // 停止DMA
+    write_dma(dma_cfg_virtual_addr, MM2S_CONTROL_REGISTER, 0);
+    write_dma(dma_data_virtual_addr, MM2S_CONTROL_REGISTER, 0);
+    write_dma(dma_data_virtual_addr, S2MM_CONTROL_REGISTER, 0);
+    dma_mm2s_status(dma_cfg_virtual_addr);
+    dma_mm2s_status(dma_data_virtual_addr);
+    dma_s2mm_status(dma_data_virtual_addr);
+
+    printf("Reset the DMA.\n");
+    write_dma(dma_cfg_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+    write_dma(dma_data_virtual_addr, S2MM_CONTROL_REGISTER, RESET_DMA);
+    write_dma(dma_data_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+
+    printf("Halt the DMA.\n");
+    write_dma(dma_cfg_virtual_addr, MM2S_CONTROL_REGISTER, HALT_DMA);
+    write_dma(dma_data_virtual_addr, S2MM_CONTROL_REGISTER, HALT_DMA);
+    write_dma(dma_data_virtual_addr, MM2S_CONTROL_REGISTER, HALT_DMA);
+
+    // addrptr_cfg_in[0] = image.cols;
+    // addrptr_cfg_in[1] = image.rows;
+    // memcpy(addrptr_data_in, image.data, image.cols*image.rows*sizeof(uint8_t));
+    // mapped_dma_cfg_base[0] = 1;
+    // mapped_dma_data_base[0] = 1;
+    // mapped_dma_data_base[0x30 / 4] = 1;
+    vector < vector < vector<int> > > allKeypoints;
+    
+    for (int level = 0; level < nlevels; ++level)
+    {
+        vector< vector <int> > levelKeypoints;
+        double scale = mvScaleFactor[level];
+        addrptr_cfg_in[2] = scale * pow(2, 14);
+        addrptr_cfg_in[3] = 1 / scale * pow(2, 14);
+
+        // 设置DMA的源和目的地址
+        write_dma(dma_cfg_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, CFG_SRC_ADDR);
+        write_dma(dma_data_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, DATA_SRC_ADDR);
+        write_dma(dma_data_virtual_addr, S2MM_DST_ADDRESS_REGISTER, DATA_DST_ADDR);
+        // 启动DMA
+        write_dma(dma_cfg_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA);
+        write_dma(dma_data_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA);
+        write_dma(dma_data_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA);
+        dma_mm2s_status(dma_cfg_virtual_addr);
+        dma_mm2s_status(dma_data_virtual_addr);
+        dma_s2mm_status(dma_data_virtual_addr);
+        // 设置传输长度
+        write_dma(dma_cfg_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, CFG_SIZE);
+        write_dma(dma_data_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, DATA_SRC_SIZE);
+        write_dma(dma_data_virtual_addr, S2MM_BUFF_LENGTH_REGISTER, DATA_DST_SIZE);
+
+        dma_mm2s_status(dma_cfg_virtual_addr);
+        dma_mm2s_status(dma_data_virtual_addr);
+        dma_s2mm_status(dma_data_virtual_addr);
+        // mapped_dma_cfg_base[0x18 / 4] = cma_get_phy_addr(addrptr_cfg_in);
+        // mapped_dma_cfg_base[0x28 / 4] = 16;
+        // mapped_dma_data_base[0x18 / 4] = cma_get_phy_addr(addrptr_data_in);
+        // mapped_dma_data_base[0x28 / 4] = buffer_len;
+
+        // mapped_dma_data_base[0x48 / 4] = cma_get_phy_addr(addrptr_data_out);
+        // mapped_dma_data_base[0x58 / 4] = sizeof(uint32_t)*16*257;
+#ifdef DEBUG
+        auto start = std::chrono::high_resolution_clock::now();
+#endif
+        // do
+        // {
+        //     usleep(10);
+        // } while (!((mapped_dma_data_base[0x34 / 4] >> 1) & 0x1));
+        // 等待DMA传输完成
+        // dma_mm2s_sync(dma_cfg_virtual_addr);
+        // dma_mm2s_sync(dma_data_virtual_addr);
+        dma_s2mm_sync(dma_data_virtual_addr);
+#ifdef DEBUG
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> tm = end - start;
+        printf("features detected in %.5fms\n", tm.count());
+#endif
+        
+        // int level_kp_num = mapped_dma_data_base[0x58 / 4]/64 - 1;
+        int level_kp_num = (int)read_dma(dma_data_virtual_addr, S2MM_BUFF_LENGTH_REGISTER) / 64 - 1;
+        int level_kp_reserve_num = level_kp_num;
+        if (level_kp_reserve_num > mnFeaturesPerLevel[level])
+            level_kp_reserve_num = mnFeaturesPerLevel[level];
+        int kp_ind = 0;
+        int it_ind = level_kp_num - 1;
+        
+        while (kp_ind < level_kp_reserve_num && it_ind >= 0)
+        {
+            vector<int> Kp;
+            Kp.reserve(12);
+            Kp.push_back(addrptr_data_out[it_ind*16] & 0b1111111);
+            Kp.push_back((addrptr_data_out[it_ind*16] >> 7) & 0b111111111);
+            Kp.push_back((addrptr_data_out[it_ind*16] >> 16) & 0b111111111);
+            Kp.push_back((addrptr_data_out[it_ind*16] >> 25) + ((addrptr_data_out[it_ind*16+1] & 0b1111) << 7));
+
+            for (int desc_ind = 0; desc_ind < 8; desc_ind++)
+            {
+                Kp.push_back((addrptr_data_out[it_ind*16+desc_ind+1] >> 4) + ((addrptr_data_out[it_ind*16+desc_ind+2] & 0b1111) << 28));
+            }
+            
+            if (Kp[3]!=0 && Kp[2] != 0){
+                levelKeypoints.push_back(Kp);
+                kp_ind++;
+            }
+            it_ind--;
+        }
+
+        allKeypoints.push_back(levelKeypoints);
+                
+        nkeypoints += kp_ind;
+    }
+
+    if( nkeypoints == 0 )
+        _descriptors.release();
+    else
+    {
+        _descriptors.create(nkeypoints, 32, CV_8U);
+        descriptors = _descriptors.getMat();
+    }
+    _keypoints.reserve(nkeypoints);
+
+    int offset = 0;
+    for (int level = 0; level < nlevels; ++level)
+    {
+        vector< vector <int> >& levelKeypoints = allKeypoints[level];
+        int level_kp_num =levelKeypoints.size();
+        float scale = mvScaleFactor[level];
+
+        Mat desc = descriptors.rowRange(offset, offset + level_kp_num);
+        desc = Mat::zeros(level_kp_num, 32, CV_8UC1);
+
+        for (int kp_ind = 0; kp_ind < level_kp_num; kp_ind++)
+        {
+            KeyPoint Kp(Point2f(scale * levelKeypoints[kp_ind][3], scale * levelKeypoints[kp_ind][2]),
+                        PATCH_SIZE*mvScaleFactor[level],
+                        float(levelKeypoints[kp_ind][1])/32 * 360 / 2 / 3.1415926,
+                        levelKeypoints[kp_ind][0],
+                        level,
+                        -1);
+#ifdef DEBUG
+            printf("Kp: %lf %lf %lf %lf %lf %d %d \n", Kp.pt.x, Kp.pt.y, Kp.size, Kp.angle, Kp.response, Kp.octave, Kp.class_id);
+#endif
+            _keypoints.push_back(Kp);
+            for (int i = 0; i < 8; i++){
+                desc.ptr(kp_ind)[i * 4 + 0] = levelKeypoints[kp_ind][4 + i] & 0xFF;
+                desc.ptr(kp_ind)[i * 4 + 1] = (levelKeypoints[kp_ind][4 + i] >> 8) & 0xFF;
+                desc.ptr(kp_ind)[i * 4 + 2] = (levelKeypoints[kp_ind][4 + i] >> 16) & 0xFF;
+                desc.ptr(kp_ind)[i * 4 + 3] = (levelKeypoints[kp_ind][4 + i] >> 24) & 0xFF;
+            }
+        }
+        offset += level_kp_num;
+    }
+    // cma_munmap(mapped_dma_cfg_base, sizeof(uint32_t)*24);
+    // cma_munmap(mapped_dma_data_base, sizeof(uint32_t)*24);
+    // cma_free(addrptr_cfg_in);
+    // cma_free(addrptr_data_in);
+    // cma_free(addrptr_data_out);
+    munmap(dma_cfg_virtual_addr, DMA_REG_SIZE);
+    munmap(dma_data_virtual_addr, DMA_REG_SIZE);
+    munmap(addrptr_cfg_in, CFG_SIZE);
+    munmap(addrptr_data_in, DATA_SRC_SIZE);
+    munmap(addrptr_data_out, DATA_DST_SIZE);
+    close(fd_dma_cfg);
+    close(fd_dma_data);
+    close(fd_dma_buf);
+#endif
 }
 
 void ORBextractor::ComputePyramid(cv::Mat image)

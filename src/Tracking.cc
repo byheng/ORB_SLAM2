@@ -36,7 +36,7 @@
 #include<iostream>
 
 #include<mutex>
-
+#include <unistd.h>
 
 using namespace std;
 
@@ -317,6 +317,7 @@ void Tracking::Track()
             }
             else
             {
+                printf("lost\n");
                 bOK = Relocalization();
             }
         }

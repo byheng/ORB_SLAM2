@@ -28,7 +28,7 @@
 #include<opencv2/core/core.hpp>
 
 #include"System.h"
-
+#include <unistd.h>
 using namespace std;
 
 void LoadImages(const string &strSequence, vector<string> &vstrImageFilenames,
@@ -41,6 +41,9 @@ int main(int argc, char **argv)
         cerr << endl << "Usage: ./mono_kitti path_to_vocabulary path_to_settings path_to_sequence" << endl;
         return 1;
     }
+
+    // ofstream ofile;
+    // ofile.open("system_log.txt");
 
     // Retrieve paths to images
     vector<string> vstrImageFilenames;
@@ -64,8 +67,10 @@ int main(int argc, char **argv)
     cv::Mat im;
     for(int ni=0; ni<nImages; ni++)
     {
+        // if (ni%200==0)
+            // ofile << "IMAGE " << ni << endl;
         // Read image from file
-        im = cv::imread(vstrImageFilenames[ni],CV_LOAD_IMAGE_UNCHANGED);
+        im = cv::imread(vstrImageFilenames[ni],cv::IMREAD_UNCHANGED);
         double tframe = vTimestamps[ni];
 
         if(im.empty())
@@ -103,6 +108,7 @@ int main(int argc, char **argv)
         if(ttrack<T)
             usleep((T-ttrack)*1e6);
     }
+    // ofile.close();
 
     // Stop all threads
     SLAM.Shutdown();

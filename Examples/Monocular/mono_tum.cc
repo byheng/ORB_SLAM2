@@ -23,7 +23,7 @@
 #include<algorithm>
 #include<fstream>
 #include<chrono>
-
+#include <unistd.h>
 #include<opencv2/core/core.hpp>
 
 #include<System.h>
@@ -41,6 +41,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    ofstream ofile;
+    ofile.open("system_log.txt");
     // Retrieve paths to images
     vector<string> vstrImageFilenames;
     vector<double> vTimestamps;
@@ -64,8 +66,9 @@ int main(int argc, char **argv)
     cv::Mat im;
     for(int ni=0; ni<nImages; ni++)
     {
+        ofile << "IMAGE " << ni << endl;
         // Read image from file
-        im = cv::imread(string(argv[3])+"/"+vstrImageFilenames[ni],CV_LOAD_IMAGE_UNCHANGED);
+        im = cv::imread(string(argv[3])+"/"+vstrImageFilenames[ni],cv::IMREAD_UNCHANGED);
         double tframe = vTimestamps[ni];
 
         if(im.empty())
@@ -104,6 +107,7 @@ int main(int argc, char **argv)
         if(ttrack<T)
             usleep((T-ttrack)*1e6);
     }
+    ofile.close();
 
     // Stop all threads
     SLAM.Shutdown();
@@ -121,7 +125,7 @@ int main(int argc, char **argv)
 
     // Save camera trajectory
     SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory.txt");
-
+    
     return 0;
 }
 

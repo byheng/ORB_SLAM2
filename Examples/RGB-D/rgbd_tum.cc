@@ -27,7 +27,7 @@
 #include<opencv2/core/core.hpp>
 
 #include<System.h>
-
+#include <unistd.h>
 using namespace std;
 
 void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageFilenamesRGB,
@@ -41,6 +41,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    ofstream ofile;
+    ofile.open("system_log.txt");
     // Retrieve paths to images
     vector<string> vstrImageFilenamesRGB;
     vector<string> vstrImageFilenamesD;
@@ -76,9 +78,10 @@ int main(int argc, char **argv)
     cv::Mat imRGB, imD;
     for(int ni=0; ni<nImages; ni++)
     {
+        ofile << "IMAGE " << ni << endl;
         // Read image and depthmap from file
-        imRGB = cv::imread(string(argv[3])+"/"+vstrImageFilenamesRGB[ni],CV_LOAD_IMAGE_UNCHANGED);
-        imD = cv::imread(string(argv[3])+"/"+vstrImageFilenamesD[ni],CV_LOAD_IMAGE_UNCHANGED);
+        imRGB = cv::imread(string(argv[3])+"/"+vstrImageFilenamesRGB[ni],cv::IMREAD_UNCHANGED);
+        imD = cv::imread(string(argv[3])+"/"+vstrImageFilenamesD[ni],cv::IMREAD_UNCHANGED);
         double tframe = vTimestamps[ni];
 
         if(imRGB.empty())
@@ -117,6 +120,7 @@ int main(int argc, char **argv)
         if(ttrack<T)
             usleep((T-ttrack)*1e6);
     }
+    ofile.close();
 
     // Stop all threads
     SLAM.Shutdown();

@@ -21,4 +21,6 @@ Vocabulary/ORBvoc.txt
 build/
 *~
 lib/
-
+CameraTrajectory.txt
+Examples/RGB-D/.nfs*
+system_log.txt
