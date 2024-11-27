@@ -28,156 +28,135 @@
 
 #include<System.h>
 #include <unistd.h>
+#include "hwBase.h"
+
+// #define RUN_RGBO
+#define RUN_MONO
+
+#define OUTWIDTH 640
+#define OUTHEIGHT 480
+#define SCA_F_MODE 0
+#define LDC_F_MODE 1
+#define SGM_F_MODE 2
+
 using namespace std;
 
 
-/**
- * @brief 从关联文件加载图像文件名及其时间戳。
- *
- * 此函数读取由 `strAssociationFilename` 指定的关联文件，并提取 RGB 图像、深度图像及其对应的时间戳文件名。
- * 提取的数据存储在提供的向量 `vstrImageFilenamesRGB`、`vstrImageFilenamesD` 和 `vTimestamps` 中。
- *
- * @param strAssociationFilename 包含图像文件名和时间戳的关联文件的路径。
- * @param vstrImageFilenamesRGB 用于存储 RGB 图像文件名的向量。
- * @param vstrImageFilenamesD 用于存储深度图像文件名的向量。
- * @param vTimestamps 用于存储每对图像对应的时间戳的向量。
- */
-void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageFilenamesRGB,
-                vector<string> &vstrImageFilenamesD, vector<double> &vTimestamps);
-
 int main(int argc, char **argv)
 {
+    char leftBuffer[OUTHEIGHT * OUTWIDTH];
+    char rightBuffer[OUTHEIGHT * OUTWIDTH];
+#ifdef RUN_RGBO
+    char *sgmO = (char *)malloc(OUTHEIGHT * OUTWIDTH * 2);
+    char *sgmC = (char *)malloc(OUTHEIGHT * OUTWIDTH * 2);
+#endif
+
     if(argc != 5)
     {
         cerr << endl << "Usage: ./rgbd_tum path_to_vocabulary path_to_settings path_to_sequence path_to_association" << endl;
         return 1;
     }
 
+    hwBaseDeInit();
+    printf("hwbaseInit\n");
+    hwBaseInit(0, 3);  //(0,3)
+    printf("init success\n");
+
     ofstream ofile;
     ofile.open("system_log.txt");
-    // Retrieve paths to images
-    vector<string> vstrImageFilenamesRGB;
-    vector<string> vstrImageFilenamesD;
-    vector<double> vTimestamps;
-    string strAssociationFilename = string(argv[4]);
-    LoadImages(strAssociationFilename, vstrImageFilenamesRGB, vstrImageFilenamesD, vTimestamps);
 
-    // Check consistency in the number of images and depthmaps
-    int nImages = vstrImageFilenamesRGB.size();
-    if(vstrImageFilenamesRGB.empty())
-    {
-        cerr << endl << "No images found in provided path." << endl;
-        return 1;
-    }
-    else if(vstrImageFilenamesD.size()!=vstrImageFilenamesRGB.size())
-    {
-        cerr << endl << "Different number of images for rgb and depth." << endl;
-        return 1;
-    }
-
-    // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::RGBD,false);
-
-    // Vector for tracking time statistics
-    vector<float> vTimesTrack;
-    vTimesTrack.resize(nImages);
-
-    cout << endl << "-------" << endl;
-    cout << "Start processing sequence ..." << endl;
-    cout << "Images in the sequence: " << nImages << endl << endl;
-
-    // Main loop
-    cv::Mat imRGB, imD;
-    for(int ni=0; ni<nImages; ni++)
+#ifdef RUN_RGBO
+    ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::RGBD,true);
+#endif
+#ifdef RUN_MONO
+    ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::MONOCULAR,true);
+#endif
+    for(int ni=0; ni>=0; ni++) // 无限循环
     {
         ofile << "IMAGE " << ni << endl;
-        // Read image and depthmap from file
-        imRGB = cv::imread(string(argv[3])+"/"+vstrImageFilenamesRGB[ni],cv::IMREAD_UNCHANGED);
-        imD = cv::imread(string(argv[3])+"/"+vstrImageFilenamesD[ni],cv::IMREAD_UNCHANGED);
-        double tframe = vTimestamps[ni];
 
-        if(imRGB.empty())
-        {
-            cerr << endl << "Failed to load image at: "
-                 << string(argv[3]) << "/" << vstrImageFilenamesRGB[ni] << endl;
+        // Read image and depthmap from camera
+        getFrame(LDC_F_MODE, leftBuffer, OUTHEIGHT * OUTWIDTH, rightBuffer, OUTHEIGHT * OUTWIDTH, 0);
+#ifdef RUN_RGBO
+        getFrame(SGM_F_MODE, (char *)sgmO, OUTHEIGHT * OUTWIDTH * 2, (char *)sgmC, OUTHEIGHT * OUTWIDTH * 2, 0);
+#endif
+        cv::Mat imRGB(OUTHEIGHT, OUTWIDTH, CV_8UC1, leftBuffer);
+        // cv::Mat imRGB(OUTHEIGHT, OUTWIDTH, CV_8UC1, rightBuffer);
+        
+#ifdef RUN_RGBO
+        // short *pShort = (short *)sgmO;
+        // 创建一个浮点型矩阵来存储转换后的数据
+        cv::Mat sgmImage(OUTHEIGHT, OUTWIDTH, CV_16UC1);
+
+        // 将16位定点数转换为浮点数
+        for (int i = 0; i < OUTHEIGHT; ++i) {
+            for (int j = 0; j < OUTWIDTH; ++j) {
+                // 定点数转换为浮点数，假设定点数包含4位小数
+                sgmImage.at<short>(i, j) = (((short *)sgmO)[i * OUTWIDTH + j] & 0xFFFF) >> 4;
+            }
+        }
+        // 归一化
+        cv::Mat imD;
+        cv::normalize(sgmImage, imD, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+
+        if(imRGB.empty() || imD.empty()) {
+            cerr << "Error: Could not capture images from camera." << endl;
             return 1;
         }
+#endif        
+        // Get the current timestamp
+        double tframe = std::chrono::duration_cast<std::chrono::duration<double> >(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+        // 计算FPS
+        static int frameCount = 0;
+        static double lastTime;
+        frameCount++;
+        double elapsedTime;
+        if (ni == 0) {
+            elapsedTime = 0;
+        } else {
+            elapsedTime += tframe - lastTime;
+        }
+        if (elapsedTime >= 1.0) {
+            double fps = frameCount / elapsedTime;
+            ofile << "Current FPS: " << fps << ", frameCount:" << frameCount << ", elapsedTime: " << elapsedTime << endl;
+            frameCount = 0;
+            elapsedTime = 0;
+        }
+        lastTime = tframe;
 
-#ifdef COMPILEDWITHC11
-        std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
-#else
-        std::chrono::monotonic_clock::time_point t1 = std::chrono::monotonic_clock::now();
-#endif
+
+// #ifdef COMPILEDWITHC11
+//         std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
+// #else
+//         std::chrono::monotonic_clock::time_point t1 = std::chrono::monotonic_clock::now();
+// #endif
 
         // Pass the image to the SLAM system
+#ifdef RUN_RGBO
         SLAM.TrackRGBD(imRGB,imD,tframe);
-
-#ifdef COMPILEDWITHC11
-        std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
-#else
-        std::chrono::monotonic_clock::time_point t2 = std::chrono::monotonic_clock::now();
+#endif
+#ifdef RUN_MONO
+        SLAM.TrackMonocular(imRGB,tframe);
 #endif
 
-        double ttrack= std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count();
+// #ifdef COMPILEDWITHC11
+//         std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
+// #else
+//         std::chrono::monotonic_clock::time_point t2 = std::chrono::monotonic_clock::now();
+// #endif
 
-        vTimesTrack[ni]=ttrack;
+//         double ttrack= std::chrono::duration_cast<std::chrono::duration<double> >(t2 - t1).count();
 
-        // Wait to load the next frame
-        double T=0;
-        if(ni<nImages-1)
-            T = vTimestamps[ni+1]-tframe;
-        else if(ni>0)
-            T = tframe-vTimestamps[ni-1];
-
-        if(ttrack<T)
-            usleep((T-ttrack)*1e6);
     }
     ofile.close();
 
     // Stop all threads
     SLAM.Shutdown();
 
-    // Tracking time statistics
-    sort(vTimesTrack.begin(),vTimesTrack.end());
-    float totaltime = 0;
-    for(int ni=0; ni<nImages; ni++)
-    {
-        totaltime+=vTimesTrack[ni];
-    }
-    cout << "-------" << endl << endl;
-    cout << "median tracking time: " << vTimesTrack[nImages/2] << endl;
-    cout << "mean tracking time: " << totaltime/nImages << endl;
-
-    // Save camera trajectory
-    SLAM.SaveTrajectoryTUM("CameraTrajectory.txt");
-    SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory.txt");   
-
+#ifdef RUN_RGBO
+    free(sgmO);
+    free(sgmC);
+#endif
     return 0;
-}
-
-void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageFilenamesRGB,
-                vector<string> &vstrImageFilenamesD, vector<double> &vTimestamps)
-{
-    ifstream fAssociation;
-    fAssociation.open(strAssociationFilename.c_str());
-    while(!fAssociation.eof())
-    {
-        string s;
-        getline(fAssociation,s);
-        if(!s.empty())
-        {
-            stringstream ss;
-            ss << s;
-            double t;
-            string sRGB, sD;
-            ss >> t;
-            vTimestamps.push_back(t);
-            ss >> sRGB;
-            vstrImageFilenamesRGB.push_back(sRGB);
-            ss >> t;
-            ss >> sD;
-            vstrImageFilenamesD.push_back(sD);
-
-        }
-    }
 }

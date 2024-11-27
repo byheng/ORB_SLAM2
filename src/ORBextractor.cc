@@ -65,9 +65,9 @@
 extern "C" {
 #include <dma_uio.h>
 }
-#define DEBUG
+// #define DEBUG
 #define DMA_REG_SIZE 0x10000
-#define DMA_BUF_BASE_ADDR 0x0e000000  
+#define DMA_BUF_BASE_ADDR 0x22000000  
 #define CFG_SRC_ADDR DMA_BUF_BASE_ADDR
 #define CFG_SIZE (sizeof(uint32_t)*4) // = 0x10
 #define DATA_DST_ADDR (CFG_SRC_ADDR + 0x10000)
@@ -1130,8 +1130,8 @@ void ORBextractor::operator()( InputArray _image, InputArray _mask, vector<KeyPo
     int fd_dma_buf = open("/dev/mem", O_RDWR | O_SYNC);
     // int fd_dma_buf = open("/dev/uio14", O_RDWR | O_SYNC);  // 只能通过 mem 打开，uio 无法打开， 原因未知
     uint32_t *addrptr_cfg_in = (uint32_t*)mmap(NULL, CFG_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_buf, CFG_SRC_ADDR);
-    uint8_t *addrptr_data_in = (uint8_t*)mmap(NULL, DATA_SRC_ADDR, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_buf, DATA_SRC_ADDR);
-    uint32_t *addrptr_data_out = (uint32_t*)mmap(NULL, DATA_DST_ADDR, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_buf, DATA_DST_ADDR);
+    uint8_t *addrptr_data_in = (uint8_t*)mmap(NULL, DATA_SRC_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_buf, DATA_SRC_ADDR);
+    uint32_t *addrptr_data_out = (uint32_t*)mmap(NULL, DATA_DST_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_dma_buf, DATA_DST_ADDR);
     
     Mat descriptors;
 
@@ -1139,12 +1139,12 @@ void ORBextractor::operator()( InputArray _image, InputArray _mask, vector<KeyPo
 
     _keypoints.clear();
     // 写入配置信息
-    printf("Writing configuration information to the DDR memory...\n");
+    // printf("Writing configuration information to the DDR memory...\n");
     addrptr_cfg_in[0] = image.cols;
     addrptr_cfg_in[1] = image.rows;
     // 写入图像数据
     memcpy(addrptr_data_in, image.data, image.cols*image.rows*sizeof(uint8_t));
-    memset(addrptr_data_out, 0, 0xFFFF);
+    memset(addrptr_data_out, 0, DATA_DST_SIZE);
 
     // 停止DMA
     write_dma(dma_cfg_virtual_addr, MM2S_CONTROL_REGISTER, 0);

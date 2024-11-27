@@ -11,6 +11,10 @@ Examples/ROS/ORB_SLAM2/Stereo
 Examples/ROS/ORB_SLAM2/build/
 Examples/Stereo/stereo_euroc
 Examples/Stereo/stereo_kitti
+Examples/Monocular/mono_tum_cam
+Examples/RGB-D/rgbd_tum_cmd
+Examples/RGB-D/rgbd_tum_gui
+Examples/RGB-D/rgbd_tum_sgm
 KeyFrameTrajectory.txt
 Thirdparty/DBoW2/build/
 Thirdparty/DBoW2/lib/
@@ -24,3 +28,5 @@ lib/
 CameraTrajectory.txt
 Examples/RGB-D/.nfs*
 system_log.txt
+Vocabulary/*
+.nfs3610056199/

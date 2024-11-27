@@ -1,0 +1,2 @@
+ ./Examples/Stereo/stereo_euroc Vocabulary/*.txt Examples/Stereo/EuRoC.yaml /mnt/datasets/MH01/mav0/cam0/data /mnt/datasets/MH01/mav0/cam1/data Examples/Stereo/EuRoC_TimeStamps/MH01.txt
+#  ./Examples/Stereo/stereo_euroc Vocabulary/*.txt Examples/Stereo/EuRoC.yaml /mnt/datasets/MH02/mav0/cam0/data /mnt/datasets/MH02/mav0/cam1/data Examples/Stereo/EuRoC_TimeStamps/MH02.txt

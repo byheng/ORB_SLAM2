@@ -1,0 +1,1 @@
+ ./Examples/RGB-D/rgbd_tum_sgm Vocabulary/RSBvoc.txt Examples/RGB-D/TUMsgm.yaml ~/ORB_SLAM2-opencv440/data/rgbd_dataset_freiburg1_xyz/ Examples/RGB-D/associations/fr1_xyz.txt
